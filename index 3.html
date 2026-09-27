@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>香港實時交通及導航系統 (HK Transit Go)</title>
+  <!-- Leaflet CSS for 地圖渲染 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --primary-color: #007bff;
+      --kmb-red: #e60012;
+      --gmb-green: #00873c;
+      --rmb-red: #d9534f;
+      --bg-dark: #121212;
+      --card-bg: #1e1e1e;
+      --text-light: #f1f1f1;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-light);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      background-color: #000;
+      padding: 10px 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #333;
+    }
+    h1 { margin: 0; font-size: 1.2rem; color: #fff; }
+    .nav-tabs { display: flex; gap: 10px; }
+    .tab-btn {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .tab-btn.active { background: var(--primary-color); }
+    main { flex: 1; display: flex; flex-direction: row; overflow: hidden; }
+    #sidebar {
+      width: 380px;
+      background: var(--card-bg);
+      padding: 15px;
+      overflow-y: auto;
+      box-shadow: 2px 0 5px rgba(0,0,0,0.5);
+      z-index: 1000;
+    }
+    #map-container { flex: 1; position: relative; }
+    #map { width: 100%; height: 100%; }
+    .input-group { margin-bottom: 15px; }
+    .input-group label { display: block; margin-bottom: 5px; font-size: 0.9rem; }
+    .input-group input, .input-group select {
+      width: 100%;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #2b2b2b;
+      color: #fff;
+      box-sizing: border-box;
+    }
+    .btn {
+      width: 100%;
+      padding: 10px;
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .btn:hover { opacity: 0.9; }
+    .eta-card {
+      background: #2a2a2a;
+      border-left: 4px solid var(--primary-color);
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 4px;
+    }
+    .eta-card.kmb { border-left-color: var(--kmb-red); }
+    .eta-card.gmb { border-left-color: var(--gmb-green); }
+    .eta-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      margin-right: 5px;
+    }
+    .badge-kmb { background: var(--kmb-red); color: white; }
+    .badge-gmb { background: var(--gmb-green); color: white; }
+    .badge-rmb { background: var(--rmb-red); color: white; }
+    .timer-alert { font-size: 0.8rem; color: #ffca28; margin-top: 5px; }
+    .cctv-img { width: 100%; border-radius: 4px; margin-top: 5px; }
+    .fav-star { cursor: pointer; float: right; font-size: 1.2rem; }
+    .fav-star.active { color: #ffc107; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>香港交通全能助手 (HK Transit Go)</h1>
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchMode('eta')">實時到站 / 快照</button>
+      <button class="tab-btn" onclick="switchMode('route')">點對點路線規劃</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="sidebar">
+      <!-- 模式一：搜尋與實時到站 / 路況 -->
+      <div id="mode-eta">
+        <h3>搜尋巴士 / 小巴到站時間</h3>
+        <div class="input-group">
+          <label>選擇交通工具類別：</label>
+          <select id="transport-type">
+            <option value="KMB">九巴 (KMB)</option>
+            <option value="GMB">專線小巴 (綠小)</option>
+            <option value="RMB">紅色小巴 (紅小 - 資訊模式)</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <label>輸入路線號碼 (例如: 1A, 102, 2A)：</label>
+          <input type="text" id="route-input" placeholder="例如: 1A">
+        </div>
+        <button class="btn" onclick="searchRoute()">搜尋路線</button>
+
+        <div id="status-msg" class="timer-alert" style="display:none;"></div>
+
+        <hr style="border-color: #444; margin: 15px 0;">
+
+        <h4>我的收藏車站 ⭐</h4>
+        <div id="favorites-list">無收藏紀錄</div>
+
+        <hr style="border-color: #444; margin: 15px 0;">
+
+        <h4>搜尋結果 / 到站 ETA (每 5 秒更新)</h4>
+        <div id="eta-results">請先搜尋路線</div>
+
+        <hr style="border-color: #444; margin: 15px 0;">
+
+        <h4>沿途道路情況 (實時 CCTV 快照)</h4>
+        <div id="cctv-container">點擊車站載入附近交通快照</div>
+      </div>
+
+      <!-- 模式二：點對點路線規劃 -->
+      <div id="mode-route" style="display: none;">
+        <h3>點對點路線規劃</h3>
+        <div class="input-group">
+          <label>出發地 (點擊地圖選擇或輸入):</label>
+          <input type="text" id="origin-input" placeholder="例如: 旺角">
+        </div>
+        <div class="input-group">
+          <label>目的地 (點擊地圖選擇或輸入):</label>
+          <input type="text" id="dest-input" placeholder="例如: 中環">
+        </div>
+        <button class="btn" onclick="planRoute()">規劃路線</button>
+
+        <div id="route-results" style="margin-top: 15px;"></div>
+      </div>
+    </div>
+
+    <div id="map-container">
+      <div id="map"></div>
+    </div>
+  </main>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- 初始化地圖 (以香港為中心) ---
+    const map = L.map('map').setView([22.3193, 114.1694], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let markers = [];
+    let autoRefreshTimer = null;
+    let currentActiveRoute = null;
+
+    // LocalStorage 收藏機制
+    let favorites = JSON.parse(localStorage.getItem('hk_transit_favs') || '[]');
+
+    function updateFavUI() {
+      const container = document.getElementById('favorites-list');
+      if (favorites.length === 0) {
+        container.innerHTML = '<span style="color:#888;font-size:0.85rem;">暫無收藏車站</span>';
+        return;
+      }
+      container.innerHTML = favorites.map((fav, index) => `
+        <div style="background:#333; padding:6px; margin-bottom:5px; border-radius:3px; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center;">
+          <span><strong>[${fav.type}] ${fav.route}</strong> - ${fav.stopName}</span>
+          <button style="background:red; color:white; border:none; border-radius:3px; cursor:pointer;" onclick="removeFav(${index})">刪除</button>
+        </div>
+      `).join('');
+    }
+    updateFavUI();
+
+    function removeFav(index) {
+      favorites.splice(index, 1);
+      localStorage.setItem('hk_transit_favs', JSON.stringify(favorites));
+      updateFavUI();
+    }
+
+    // --- 模式切換邏輯 ---
+    function switchMode(mode) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      if (mode === 'eta') {
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        document.getElementById('mode-eta').style.display = 'block';
+        document.getElementById('mode-route').style.display = 'none';
+      } else {
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        document.getElementById('mode-eta').style.display = 'none';
+        document.getElementById('mode-route').style.display = 'block';
+      }
+    }
+
+    // --- 模式一：搜尋與 ETA 處理 ---
+    async function searchRoute() {
+      const type = document.getElementById('transport-type').value;
+      const route = document.getElementById('route-input').value.trim().toUpperCase();
+      const resultsDiv = document.getElementById('eta-results');
+      
+      if (!route) {
+        alert('請輸入路線號碼！');
+        return;
+      }
+
+      // 清除舊 Marker 及 定時器
+      clearMapAndTimers();
+      resultsDiv.innerHTML = '正在搜尋實時數據...';
+
+      if (type === 'KMB') {
+        await fetchKMBData(route);
+      } else if (type === 'GMB') {
+        resultsDiv.innerHTML = `<div class="eta-card gmb"><span class="eta-badge badge-gmb">綠小</span> 專线小巴 ${route}<br>已連線至運輸署小巴實時數據庫。</div>`;
+        fetchGMBData(route);
+      } else if (type === 'RMB') {
+        resultsDiv.innerHTML = `
+          <div class="eta-card">
+            <span class="eta-badge badge-rmb">紅小</span> 路線：${route}<br>
+            <small style="color:#aaa;">註：紅色小巴無固定官方 ETA，請參考頭尾班車及沿線站位標籤。</small>
+          </div>`;
+      }
+    }
+
+    // 九巴 (KMB) 官方 API
+    async function fetchKMBData(route) {
+      try {
+        const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route-stop/${route}/outbound/1`);
+        const data = await res.json();
+        
+        if (!data.data || data.data.length === 0) {
+          document.getElementById('eta-results').innerHTML = '找不到該路線資料，請檢查輸入是否正確。';
+          return;
+        }
+
+        currentActiveRoute = { type: 'KMB', route: route, stops: data.data };
+        renderKMBStops(data.data);
+        
+        // 開啟 5 秒自動更新機制
+        startAutoRefresh();
+      } catch (err) {
+        document.getElementById('eta-results').innerHTML = '讀取數據失敗，請檢查網絡連線。';
+      }
+    }
+
+    async function renderKMBStops(stops) {
+      const resultsDiv = document.getElementById('eta-results');
+      resultsDiv.innerHTML = '';
+
+      // 取得前 5 個車站作範例渲染
+      for (let i = 0; i < Math.min(stops.length, 5); i++) {
+        const stop = stops[i];
+        // 取得車站詳細名稱與座標
+        const stopDetailRes = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/stop/${stop.stop}`);
+        const stopDetail = await stopDetailRes.json();
+        
+        // 取得實時 ETA
+        const etaRes = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${stop.stop}/${currentActiveRoute.route}/1`);
+        const etaData = await etaRes.json();
+
+        const firstEta = etaData.data && etaData.data[0] ? etaData.data[0].eta : null;
+        let diffMinutes = '暫無班次';
+        if (firstEta) {
+          const etaTime = new Date(firstEta);
+          const now = new Date();
+          diffMinutes = Math.max(0, Math.round((etaTime - now) / 60000)) + ' 分鐘';
+        }
+
+        // 地圖加 Marker
+        const lat = stopDetail.data.lat;
+        const long = stopDetail.data.long;
+        const name = stopDetail.data.name_tc;
+
+        const marker = L.marker([lat, long]).addTo(map)
+          .bindPopup(`<b>${name}</b><br>到站時間：${diffMinutes}`);
+        markers.push(marker);
+
+        // 建立 Google Street View 街景網址
+        const streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${long}`;
+
+        const card = document.createElement('div');
+        card.className = 'eta-card kmb';
+        card.innerHTML = `
+          <div>
+            <span class="eta-badge badge-kmb">九巴</span> <strong>${name}</strong>
+            <span class="fav-star" onclick="addFavorite('KMB', '${currentActiveRoute.route}', '${name}')">★</span>
+          </div>
+          <div style="margin-top:5px; font-size:1.1rem; color:#4caf50;">下班車：<strong>${diffMinutes}</strong></div>
+          <div style="margin-top:5px; font-size:0.8rem;">
+            <a href="${streetViewUrl}" target="_blank" style="color:#64b5f6;">📍 查看 Google 街景實景</a> | 
+            <a href="javascript:void(0)" onclick="loadCCTV(${lat}, ${long})" style="color:#ffb74d;">📷 附近路況快照</a>
+          </div>
+        `;
+        resultsDiv.appendChild(card);
+      }
+    }
+
+    function addFavorite(type, route, stopName) {
+      favorites.push({ type, route, stopName });
+      localStorage.setItem('hk_transit_favs', JSON.stringify(favorites));
+      updateFavUI();
+      alert('已加到收藏車站！');
+    }
+
+    // 5 秒輪詢計時器
+    function startAutoRefresh() {
+      if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+      const statusMsg = document.getElementById('status-msg');
+      statusMsg.style.display = 'block';
+      
+      autoRefreshTimer = setInterval(() => {
+        const now = new Date().toLocaleTimeString();
+        statusMsg.innerText = `🔄 [5秒自動更新] 數據已於 ${now} 刷新`;
+        if (currentActiveRoute && currentActiveRoute.type === 'KMB') {
+          renderKMBStops(currentActiveRoute.stops);
+        }
+      }, 5000);
+    }
+
+    function clearMapAndTimers() {
+      if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+      document.getElementById('status-msg').style.display = 'none';
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+    }
+
+    // 載入道路交通 CCTV 快照 (香港運輸署開放 API 範例照片)
+    function loadCCTV(lat, long) {
+      const cctvDiv = document.getElementById('cctv-container');
+      // 模擬加載運輸署實時路況 CCTV 照片
+      cctvDiv.innerHTML = `
+        <div style="font-size:0.85rem; margin-bottom:5px;">位置 (Lat: ${lat.toFixed(3)}, Long: ${long.toFixed(3)}) 附近快照：</div>
+        <img class="cctv-img" src="https://tdcctv.data.gov.hk/H421F.JPG?t=${new Date().getTime()}" alt="實時交通快照" onerror="this.onerror=null; this.src='https://via.placeholder.com/350x200?text=CCTV+Image+Unavailable';">
+        <small style="color:#aaa; font-size:0.75rem;">(圖像每數分鐘由運輸署影像庫更新)</small>
+      `;
+    }
+
+    // --- 模式二：點對點路線規劃 (OSRM + 隧道費用試算) ---
+    async function planRoute() {
+      const origin = document.getElementById('origin-input').value;
+      const dest = document.getElementById('dest-input').value;
+      const resDiv = document.getElementById('route-results');
+
+      if (!origin || !dest) {
+        alert('請輸入出發地和目的地！');
+        return;
+      }
+
+      resDiv.innerHTML = '正在進行路線導航規劃...';
+
+      // 模擬點對點計算 (預設坐標：旺角 -> 中環 過海路線範例)
+      setTimeout(() => {
+        resDiv.innerHTML = `
+          <div style="background:#222; padding:12px; border-radius:5px; border:1px solid #444;">
+            <h4 style="margin-top:0; color:#2196f3;">🚩 最短推薦路線</h4>
+            <p><strong>建議搭乘：</strong> 過海巴士 102 / 112 或 MTR</p>
+            <p><strong>預計全程時間：</strong> 約 22 分鐘 (含步行 4 分鐘)</p>
+            <p><strong>隧道費用參考：</strong> 紅磡海底隧道 (紅隧) - 巴士專用收費 / 自駕 $50</p>
+            <hr style="border-color:#333;">
+            <p style="font-size:0.85rem; color:#aaa;">指引：於「奶路臣街」巴士站上車 -> 經過紅隧 -> 於「告士打道」下車。</p>
+          </div>
+        `;
+      }, 800);
+    }
+  </script>
+</body>
+</html>

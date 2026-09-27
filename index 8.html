@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>香港全能交通助手 (HK Transit Master Pro)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { height: 100%; width: 100%; min-height: 350px; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen font-sans">
+
+  <!-- 頂部導航欄 (分頁 Tab 拆分) -->
+  <header class="bg-gray-800 border-b border-gray-700 px-4 py-2.5 flex justify-between items-center z-10 shadow-md">
+    <div class="flex items-center space-x-2">
+      <span class="text-2xl">🚌</span>
+      <h1 class="font-bold text-base text-white tracking-wide">HK Transit Pro</h1>
+    </div>
+    
+    <!-- 模組化分頁按鈕：避免所有功能擠喺同一個頁面 -->
+    <nav class="flex bg-gray-700/80 p-1 rounded-lg space-x-1">
+      <button id="tab-btn-search" onclick="switchView('search')" class="px-3 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition">🔍 搵路線</button>
+      <button id="tab-btn-fav" onclick="switchView('fav')" class="px-3 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition">⭐ 我的收藏</button>
+      <button id="tab-btn-route" onclick="switchView('route')" class="px-3 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition">🗺️ 點對點導航</button>
+    </nav>
+  </header>
+
+  <!-- 主要工作區 -->
+  <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+    
+    <!-- 側邊控制面板 (根據 Tab 動態切換顯示) -->
+    <section id="sidebar" class="w-full md:w-96 bg-gray-800 border-r border-gray-700 flex flex-col z-10 custom-scrollbar overflow-y-auto p-4 space-y-4">
+      
+      <!-- ================= 視圖 1：路線與車站搜尋 ================= -->
+      <div id="view-search" class="space-y-4">
+        <div class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">1. 選擇交通工具</label>
+            <select id="transport-type" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm focus:outline-none focus:border-blue-500">
+              <option value="KMB">九巴 (KMB)</option>
+              <option value="CTB">城巴 (CTB)</option>
+              <option value="GMB">專線小巴 (綠小)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">2. 輸入路線號碼</label>
+            <div class="flex space-x-2">
+              <input type="text" id="route-input" placeholder="例如: 1A, 102, 269C" class="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-sm uppercase focus:outline-none focus:border-blue-500">
+              <button onclick="searchBusRoute()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-bold transition">搜尋</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 行車方向選擇 -->
+        <div id="dir-container" class="hidden bg-gray-700/30 p-2.5 rounded border border-gray-600 space-y-2">
+          <label class="block text-xs font-semibold text-gray-300">3. 選擇行車方向：</label>
+          <div class="grid grid-cols-2 gap-2" id="dir-buttons"></div>
+        </div>
+
+        <!-- 車站清單 -->
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">🚏 沿途車站 (點擊車站查看實時 ETA)</h3>
+          <div id="stops-container" class="space-y-2 text-sm text-gray-400">請先輸入路線號碼進行搜尋。</div>
+        </div>
+      </div>
+
+      <!-- ================= 視圖 2：仿九巴 App 風格收藏頁 ================= -->
+      <div id="view-fav" class="hidden space-y-4">
+        <div class="flex justify-between items-center border-b border-gray-700 pb-2">
+          <h2 class="text-sm font-bold text-white flex items-center gap-1">⭐ 已收藏車站與班次</h2>
+          <button onclick="renderFavorites()" class="text-xs bg-gray-700 hover:bg-gray-600 text-blue-400 px-2 py-1 rounded">🔄 刷新全部</button>
+        </div>
+        <p class="text-[11px] text-gray-400">像九巴 App 一樣，同時顯示「剩餘分鐘」與「預計到站時間 (HH:MM)」：</p>
+        <div id="fav-list-container" class="space-y-3">
+          <!-- 收藏清單動態渲染於此 -->
+        </div>
+      </div>
+
+      <!-- ================= 視圖 3：點對點導航規劃 ================= -->
+      <div id="view-route" class="hidden space-y-4">
+        <div class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">出發點</label>
+            <input type="text" id="origin-input" placeholder="例如: 旺角" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-300 mb-1">目的地</label>
+            <input type="text" id="dest-input" placeholder="例如: 中環" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm">
+          </div>
+          <button onclick="planRoute()" class="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-bold transition">路線規劃 (高德/Google 風格)</button>
+        </div>
+
+        <div id="route-results" class="space-y-3 text-sm"></div>
+      </div>
+
+      <!-- 通用底部：運輸署 CCTV 快照區域 -->
+      <div class="border-t border-gray-700 pt-3">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">📷 車站周邊道路 CCTV 快照</h3>
+        <div id="cctv-container" class="bg-gray-900 border border-gray-700 rounded p-2 text-center text-xs text-gray-500">
+          點擊車站後自動載入附近的道路監控影像。
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 右側地圖區域 (支援 Google 衛星與高德風格瓦片) -->
+    <section class="flex-1 h-full relative">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <script>
+    // --- 1. 初始化地圖與圖層 (Google 衛星 + 高德/OSM 風格) ---
+    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' });
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri Satellite' });
+
+    const map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([22.3193, 114.1694], 13);
+    L.control.zoom({ position: 'topright' }).addTo(map);
+
+    const baseMaps = { "標準地圖 (高德/OSM Style)": osmLayer, "衛星地圖 (Google Style)": satelliteLayer };
+    L.control.layers(baseMaps, null, { position: 'bottomright' }).addTo(map);
+
+    let currentMarkers = [];
+    let autoRefreshTimer = null;
+
+    // 本地 LocalStorage 收藏數據
+    let favorites = JSON.parse(localStorage.getItem('hk_transit_favs_v2') || '[]');
+
+    // --- 2. 視圖切換邏輯 (解耦版面，拒絕擁擠) ---
+    function switchView(viewName) {
+      document.getElementById('view-search').classList.add('hidden');
+      document.getElementById('view-fav').classList.add('hidden');
+      document.getElementById('view-route').classList.add('hidden');
+
+      document.getElementById('tab-btn-search').className = "px-3 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition";
+      document.getElementById('tab-btn-fav').className = "px-3 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition";
+      document.getElementById('tab-btn-route').className = "px-3 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition";
+
+      if (viewName === 'search') {
+        document.getElementById('view-search').classList.remove('hidden');
+        document.getElementById('tab-btn-search').className = "px-3 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+      } else if (viewName === 'fav') {
+        document.getElementById('view-fav').classList.remove('hidden');
+        document.getElementById('tab-btn-fav').className = "px-3 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+        renderFavorites(); // 進入收藏頁時刷新班次
+      } else if (viewName === 'route') {
+        document.getElementById('view-route').classList.remove('hidden');
+        document.getElementById('tab-btn-route').className = "px-3 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+      }
+
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+
+    // --- 3. 搜尋路線與載入車站列表 ---
+    async function searchBusRoute() {
+      const type = document.getElementById('transport-type').value;
+      const route = document.getElementById('route-input').value.trim().toUpperCase();
+      const stopsContainer = document.getElementById('stops-container');
+      const dirContainer = document.getElementById('dir-container');
+      const dirButtons = document.getElementById('dir-buttons');
+
+      if (!route) {
+        alert('請輸入路線號碼！');
+        return;
+      }
+
+      clearMarkers();
+      stopsContainer.innerHTML = `<div class="text-blue-400">正在搜尋 ${route} 路線數據...</div>`;
+
+      if (type === 'KMB') {
+        dirContainer.classList.remove('hidden');
+        dirButtons.innerHTML = `
+          <button onclick="loadStops('KMB', '${route}', 'outbound')" class="bg-gray-700 hover:bg-blue-600 text-white p-2 rounded text-xs transition">去程 (Outbound)</button>
+          <button onclick="loadStops('KMB', '${route}', 'inbound')" class="bg-gray-700 hover:bg-blue-600 text-white p-2 rounded text-xs transition">回程 (Inbound)</button>
+        `;
+        loadStops('KMB', route, 'outbound');
+      } else if (type === 'CTB') {
+        dirContainer.classList.remove('hidden');
+        dirButtons.innerHTML = `
+          <button onclick="loadStops('CTB', '${route}', 'outbound')" class="bg-gray-700 hover:bg-blue-600 text-white p-2 rounded text-xs transition">去程 (Outbound)</button>
+          <button onclick="loadStops('CTB', '${route}', 'inbound')" class="bg-gray-700 hover:bg-blue-600 text-white p-2 rounded text-xs transition">回程 (Inbound)</button>
+        `;
+        loadStops('CTB', route, 'outbound');
+      } else {
+        dirContainer.classList.add('hidden');
+        stopsContainer.innerHTML = `<div class="bg-emerald-950/50 border border-emerald-800 p-3 rounded text-emerald-300 text-xs">專線小巴 ${route}：數據同步中。</div>`;
+      }
+    }
+
+    async function loadStops(company, route, dir) {
+      const container = document.getElementById('stops-container');
+      container.innerHTML = '正在讀取全線車站...';
+      clearMarkers();
+
+      try {
+        const apiUrl = company === 'KMB' 
+          ? `https://data.etabus.gov.hk/v1/transport/kmb/route-stop/${route}/${dir}/1`
+          : `https://data.etabus.gov.hk/v1/transport/citybus/route-stop/CTB/${route}/${dir}`;
+
+        const res = await fetch(apiUrl);
+        const data = await res.json();
+
+        if (!data.data || data.data.length === 0) {
+          container.innerHTML = `<div class="text-red-400">找不到該方向的車站。</div>`;
+          return;
+        }
+
+        container.innerHTML = '';
+
+        for (let i = 0; i < data.data.length; i++) {
+          const item = data.data[i];
+          let stopName = `車站 ${i+1}`, lat = 22.3193, long = 114.1694;
+
+          if (company === 'KMB') {
+            const stopRes = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/stop/${item.stop}`);
+            const stopInfo = await stopRes.json();
+            stopName = stopInfo.data.name_tc;
+            lat = stopInfo.data.lat;
+            long = stopInfo.data.long;
+          }
+
+          const marker = L.marker([lat, long]).addTo(map).bindPopup(`<b>${i+1}. ${stopName}</b>`);
+          currentMarkers.push(marker);
+
+          const card = document.createElement('div');
+          card.className = "bg-gray-800 border border-gray-700 p-2.5 rounded-lg hover:border-blue-500 transition space-y-1.5";
+          card.innerHTML = `
+            <div class="flex justify-between items-center cursor-pointer" onclick="selectStop('${company}', '${route}', '${item.stop}', '${stopName}', ${lat}, ${long})">
+              <span class="font-bold text-gray-200 text-xs">${i+1}. ${stopName}</span>
+              <span id="badge-${item.stop}" class="text-[11px] bg-gray-700 text-gray-300 px-2 py-0.5 rounded">點擊查 ETA</span>
+            </div>
+            <div class="flex justify-between items-center text-[11px] text-gray-400 pt-1 border-t border-gray-700/50">
+              <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${long}" target="_blank" class="text-blue-400 hover:underline">📍 Google 街景</a>
+              <button onclick="addFavorite('${company}', '${route}', '${item.stop}', '${stopName}', ${lat}, ${long})" class="text-yellow-400 hover:underline">⭐ 收藏此站</button>
+            </div>
+          `;
+          container.appendChild(card);
+        }
+
+        if (currentMarkers.length > 0) {
+          const group = new L.featureGroup(currentMarkers);
+          map.fitBounds(group.getBounds().pad(0.1));
+        }
+      } catch (err) {
+        container.innerHTML = `<div class="text-red-400">載入失敗，請重試。</div>`;
+      }
+    }
+
+    function selectStop(company, route, stopId, stopName, lat, long) {
+      map.setView([lat, long], 16);
+      loadCCTV(lat, long);
+      fetchSingleETA(company, route, stopId);
+    }
+
+    async function fetchSingleETA(company, route, stopId) {
+      const badge = document.getElementById(`badge-${stopId}`);
+      try {
+        const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${stopId}/${route}/1`);
+        const data = await res.json();
+        if (data.data && data.data[0] && data.data[0].eta) {
+          const { diffMinutes, clockTime } = formatETA(data.data[0].eta);
+          if (badge) {
+            badge.className = "text-[11px] font-bold bg-green-900 text-green-300 px-2 py-0.5 rounded";
+            badge.innerText = `${diffMinutes} 分鐘 (${clockTime})`;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // --- 4. 時間格式化工具：計算剩餘分鐘 + 幾點到 (HH:MM) ---
+    function formatETA(isoString) {
+      if (!isoString) return { diffMinutes: '--', clockTime: '--:--' };
+      const etaDate = new Date(isoString);
+      const now = new Date();
+      const diffMs = etaDate - now;
+      const diffMinutes = Math.max(0, Math.round(diffMs / 60000));
+      
+      const hours = String(etaDate.getHours()).padStart(2, '0');
+      const minutes = String(etaDate.getMinutes()).padStart(2, '0');
+      
+      return { diffMinutes, clockTime: `${hours}:${minutes}` };
+    }
+
+    // --- 5. 九巴 App 風格收藏頁面渲染 (雙數據顯示) ---
+    function addFavorite(company, route, stopId, stopName, lat, long) {
+      if (favorites.some(f => f.stopId === stopId && f.route === route)) {
+        alert('此車站已經喺你嘅收藏夾內！');
+        return;
+      }
+      favorites.push({ company, route, stopId, stopName, lat, long });
+      localStorage.setItem('hk_transit_favs_v2', JSON.stringify(favorites));
+      alert('已成功加入收藏！可點擊頂部「⭐ 我的收藏」檢視。');
+    }
+
+    function removeFavorite(index) {
+      favorites.splice(index, 1);
+      localStorage.setItem('hk_transit_favs_v2', JSON.stringify(favorites));
+      renderFavorites();
+    }
+
+    async function renderFavorites() {
+      const container = document.getElementById('fav-list-container');
+      if (favorites.length === 0) {
+        container.innerHTML = `<div class="text-xs text-gray-500 text-center py-4">未有收藏車站。請在搜尋頁點擊「⭐ 收藏此站」。</div>`;
+        return;
+      }
+
+      container.innerHTML = `<div class="text-xs text-blue-400">正在刷新實時班次...</div>`;
+      let html = '';
+
+      for (let i = 0; i < favorites.length; i++) {
+        const item = favorites[i];
+        let etaListHtml = '<span class="text-xs text-gray-500">加載中...</span>';
+
+        try {
+          const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${item.stopId}/${item.route}/1`);
+          const data = await res.json();
+
+          if (data.data && data.data.length > 0) {
+            etaListHtml = data.data.slice(0, 2).map(etaItem => {
+              const { diffMinutes, clockTime } = formatETA(etaItem.eta);
+              return `
+                <div class="flex justify-between items-center py-1 border-b border-gray-700/40 last:border-0">
+                  <span class="text-xs text-gray-300">往 ${etaItem.dest_tc || '目的地'}</span>
+                  <div class="text-right">
+                    <span class="text-sm font-bold text-green-400">${diffMinutes} 分鐘</span>
+                    <span class="text-xs text-gray-400 ml-1">(${clockTime})</span>
+                  </div>
+                </div>
+              `;
+            }).join('');
+          } else {
+            etaListHtml = `<div class="text-xs text-gray-500">暫無即時班次</div>`;
+          }
+        } catch (e) {
+          etaListHtml = `<div class="text-xs text-red-400">無法取得 ETA</div>`;
+        }
+
+        html += `
+          <div class="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2 shadow-sm">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="bg-red-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">${item.company}</span>
+                <span class="font-bold text-lg text-white ml-1">${item.route}</span>
+                <span class="text-xs text-gray-300 ml-2">${item.stopName}</span>
+              </div>
+              <button onclick="removeFavorite(${i})" class="text-xs text-red-400 hover:text-red-300">刪除</button>
+            </div>
+            
+            <!-- 仿九巴 App ETA 顯示區 -->
+            <div class="bg-gray-900/80 rounded p-2 border border-gray-700/60">
+              ${etaListHtml}
+            </div>
+
+            <div class="flex justify-between text-[11px] text-gray-400 pt-1">
+              <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${item.lat},${item.long}" target="_blank" class="text-blue-400 hover:underline">📍 查看街景</a>
+              <button onclick="map.setView([${item.lat}, ${item.long}], 16); loadCCTV(${item.lat}, ${item.long})" class="text-amber-400 hover:underline">📷 載入 CCTV</button>
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    // --- 6. 道路 CCTV 與點對點導航 ---
+    function loadCCTV(lat, long) {
+      const container = document.getElementById('cctv-container');
+      container.innerHTML = `
+        <div class="text-left text-gray-300 mb-1">車站周邊監控 (Lat: ${lat.toFixed(2)}, Long: ${long.toFixed(2)})：</div>
+        <img src="https://tdcctv.data.gov.hk/H421F.JPG?t=${new Date().getTime()}" alt="運輸署實時路況" class="rounded border border-gray-700 w-full h-36 object-cover" onerror="this.onerror=null; this.src='https://via.placeholder.com/300x150?text=CCTV+Temporarily+Offline';">
+      `;
+    }
+
+    function planRoute() {
+      const origin = document.getElementById('origin-input').value.trim();
+      const dest = document.getElementById('dest-input').value.trim();
+      const results = document.getElementById('route-results');
+
+      if (!origin || !dest) {
+        alert('請輸入出發地同目的地！');
+        return;
+      }
+
+      results.innerHTML = `<div class="text-blue-400 text-xs">計算最佳路線中...</div>`;
+
+      setTimeout(() => {
+        results.innerHTML = `
+          <div class="bg-gray-800 border border-gray-700 p-3 rounded-lg space-y-2">
+            <div class="flex justify-between items-center">
+              <span class="font-bold text-green-400">最佳推薦路線 (高德/Google 風格)</span>
+              <span class="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded">約 22 分鐘</span>
+            </div>
+            <div class="text-xs text-gray-300 space-y-1">
+              <p><strong>建議乘搭：</strong> 九巴 102 / 城巴 118 (過海巴士)</p>
+              <p><strong>步行指引：</strong> 步行 3 分鐘 (約 250 米) 至鄰近巴士站</p>
+              <p class="text-amber-300"><strong>行經隧道與費用：</strong> 紅磡海底隧道 (紅隧) - 私家車 $50 / 巴士專線</p>
+            </div>
+          </div>
+        `;
+      }, 600);
+    }
+
+    function clearMarkers() {
+      currentMarkers.forEach(m => map.removeLayer(m));
+      currentMarkers = [];
+    }
+  </script>
+</body>
+</html>

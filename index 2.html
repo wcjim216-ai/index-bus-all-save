@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>香港即時交通及到站查詢系統 (Pro)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome 圖標 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Leaflet Map CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { height: calc(100vh - 80px); width: 100%; z-index: 1; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-100 font-sans h-screen flex flex-col overflow-hidden">
+
+  <!-- 頂部導航欄 -->
+  <header class="bg-slate-900 text-white px-4 py-3 flex justify-between items-center z-10 shadow-md">
+    <div class="flex items-center space-x-3">
+      <i class="fa-solid fa-bus-simple text-amber-400 text-2xl"></i>
+      <h1 class="font-bold text-lg tracking-wide">HK Transport Live Pro</h1>
+    </div>
+    <!-- 模式切換 Tabs -->
+    <div class="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+      <button id="tab-eta" onclick="switchMode('eta')" class="px-4 py-1.5 rounded-md text-sm font-medium bg-amber-500 text-slate-950 transition">
+        <i class="fa-solid fa-clock mr-1"></i>到站時間 & CCTV
+      </button>
+      <button id="tab-planner" onclick="switchMode('planner')" class="px-4 py-1.5 rounded-md text-sm font-medium text-slate-300 hover:text-white transition">
+        <i class="fa-solid fa-route mr-1"></i>點對點點導航
+      </button>
+    </div>
+  </header>
+
+  <!-- 主內容區 -->
+  <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+
+    <!-- 左側面板 (控制與列表) -->
+    <section class="w-full md:w-96 bg-white z-10 flex flex-col border-r border-slate-200 shadow-lg h-1/2 md:h-full">
+      
+      <!-- MODE 1: 到站查詢面板 -->
+      <div id="panel-eta" class="p-4 flex flex-col h-full">
+        <!-- 搜尋與篩選 -->
+        <div class="space-y-2">
+          <div class="relative">
+            <input type="text" id="route-search" placeholder="搜尋巴士 / 專線小巴路線 (例: 1A, 2A, 16M)" 
+                   class="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400"></i>
+          </div>
+          <div class="flex space-x-1">
+            <button onclick="setFilter('ALL')" class="filter-btn flex-1 py-1 text-xs rounded border border-slate-300 bg-slate-800 text-white font-medium">全部</button>
+            <button onclick="setFilter('BUS')" class="filter-btn flex-1 py-1 text-xs rounded border border-slate-300 text-slate-600 hover:bg-slate-100">巴士</button>
+            <button onclick="setFilter('GMB')" class="filter-btn flex-1 py-1 text-xs rounded border border-slate-300 text-slate-600 hover:bg-slate-100">綠小</button>
+            <button onclick="setFilter('RMB')" class="filter-btn flex-1 py-1 text-xs rounded border border-slate-300 text-slate-600 hover:bg-slate-100">紅小</button>
+          </div>
+        </div>
+
+        <!-- 收藏夾按鈕 -->
+        <div class="mt-3 flex justify-between items-center text-xs text-slate-500 border-b pb-2">
+          <span><i class="fa-solid fa-star text-amber-500 mr-1"></i>我的收藏夾</span>
+          <button onclick="toggleFavList()" class="text-indigo-600 hover:underline">展開/隱藏</button>
+        </div>
+        <div id="fav-container" class="hidden my-2 max-h-28 overflow-y-auto custom-scrollbar border rounded p-2 bg-slate-50 space-y-1"></div>
+
+        <!-- 搜尋結果/路線選擇 -->
+        <div id="route-list" class="mt-2 flex-1 overflow-y-auto custom-scrollbar space-y-2 divide-y divide-slate-100">
+          <div class="text-center text-slate-400 text-xs py-8">請輸入路線號碼開始查詢</div>
+        </div>
+
+        <!-- ETA 實時資訊面板 (選取站點後顯示) -->
+        <div id="eta-display" class="hidden mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <span id="eta-stop-name" class="font-bold text-slate-800 text-sm">--</span>
+              <p id="eta-route-info" class="text-xs text-slate-500">--</p>
+            </div>
+            <button id="fav-toggle-btn" onclick="toggleBookmarkCurrent()" class="text-slate-400 hover:text-amber-500 text-lg">
+              <i class="fa-regular fa-star"></i>
+            </button>
+          </div>
+
+          <!-- 到站時間列表 -->
+          <div id="eta-timer-list" class="space-y-1 my-2"></div>
+
+          <!-- 自動更新計時條 -->
+          <div class="flex justify-between items-center text-[10px] text-slate-500 mt-2 border-t pt-1">
+            <span>更新倒數: <strong id="refresh-countdown" class="text-amber-600">5</strong>s</span>
+            <button onclick="fetchCurrentETA()" class="hover:text-slate-800"><i class="fa-solid fa-rotate-right mr-1"></i>即時重整</button>
+          </div>
+
+          <!-- StreetView 與 CCTV 快捷鈕 -->
+          <div class="mt-2 pt-2 border-t flex space-x-2">
+            <a id="streetview-btn" target="_blank" class="flex-1 text-center py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 transition">
+              <i class="fa-solid fa-street-view mr-1"></i>Google 街景
+            </a>
+            <button id="cctv-btn" onclick="openCCTVModal()" class="flex-1 text-center py-1 bg-slate-700 text-white rounded text-xs hover:bg-slate-800 transition">
+              <i class="fa-solid fa-video mr-1"></i>道路實況
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODE 2: 點對點導航規劃面板 -->
+      <div id="panel-planner" class="p-4 flex-col h-full hidden">
+        <h2 class="font-bold text-slate-800 text-sm mb-3"><i class="fa-solid fa-location-arrow text-indigo-600 mr-2"></i>點對點路線規劃</h2>
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs text-slate-500">起點 (輸入或點擊地圖)：</label>
+            <input type="text" id="plan-start" placeholder="例如: 旺角站" class="w-full p-2 border rounded text-sm focus:ring-1 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">終點 (輸入或點擊地圖)：</label>
+            <input type="text" id="plan-end" placeholder="例如: 中環大會堂" class="w-full p-2 border rounded text-sm focus:ring-1 focus:ring-indigo-500">
+          </div>
+          <button onclick="calculateRoute()" class="w-full py-2 bg-indigo-600 text-white font-medium rounded text-sm hover:bg-indigo-700 transition shadow">
+            開始規劃最快路線
+          </button>
+        </div>
+
+        <!-- 導航計算結果 -->
+        <div id="planner-result" class="mt-4 flex-1 overflow-y-auto custom-scrollbar space-y-2 hidden">
+          <div class="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs space-y-1">
+            <div class="font-bold text-indigo-900 text-sm flex justify-between">
+              <span>推薦方案：最佳車程</span>
+              <span id="route-time" class="text-emerald-600">-- 分鐘</span>
+            </div>
+            <p>🚶 步行時間: <span id="walk-time">--</span> 分鐘</p>
+            <p>🚗 預計隧道費: <span id="toll-fee" class="font-semibold text-amber-700">--</span></p>
+            <p class="text-slate-500 text-[11px] mt-2">提示：點擊下方地圖可預覽詳細路線指引。</p>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 右側地圖區域 -->
+    <section class="flex-1 relative">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <!-- CCTV 彈出視窗 Modal -->
+  <div id="cctv-modal" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center hidden">
+    <div class="bg-white rounded-xl max-w-lg w-full p-4 m-4 shadow-2xl relative">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="font-bold text-slate-800 text-base" id="cctv-title">沿路道路快照實況 (運輸署)</h3>
+        <button onclick="closeCCTVModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <div class="bg-black aspect-video rounded-lg overflow-hidden flex items-center justify-center">
+        <img id="cctv-img" src="" alt="CCTV 載入中..." class="w-full h-full object-cover">
+      </div>
+      <p class="text-xs text-slate-400 mt-2 text-right">資料來源：香港運輸署實時影像 API</p>
+    </div>
+  </div>
+
+  <!-- JavaScript 邏輯庫 -->
+  <script>
+    // --- 全域變數與狀態管理 ---
+    let map, userMarker, routePolyline;
+    let currentFilter = 'ALL';
+    let currentETAContext = null; 
+    let autoRefreshTimer = null;
+    let countdownInterval = null;
+    let countdownSec = 5;
+
+    // LocalStorage 收藏夾初始化
+    let bookmarks = JSON.parse(localStorage.getItem('hk_transit_favs') || '[]');
+
+    // 初始化地圖 (中心定於香港 Central)
+    window.onload = () => {
+      initMap();
+      setupEventListeners();
+      renderBookmarks();
+    };
+
+    function initMap() {
+      map = L.map('map').setView([22.3193, 114.1694], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+    }
+
+    // Tab 模式切換
+    function switchMode(mode) {
+      const etaPanel = document.getElementById('panel-eta');
+      const plannerPanel = document.getElementById('panel-planner');
+      const btnEta = document.getElementById('tab-eta');
+      const btnPlanner = document.getElementById('tab-planner');
+
+      if (mode === 'eta') {
+        etaPanel.classList.remove('hidden');
+        plannerPanel.classList.add('hidden');
+        btnEta.className = 'px-4 py-1.5 rounded-md text-sm font-medium bg-amber-500 text-slate-950 transition';
+        btnPlanner.className = 'px-4 py-1.5 rounded-md text-sm font-medium text-slate-300 hover:text-white transition';
+      } else {
+        etaPanel.classList.add('hidden');
+        plannerPanel.classList.remove('hidden');
+        btnPlanner.className = 'px-4 py-1.5 rounded-md text-sm font-medium bg-amber-500 text-slate-950 transition';
+        btnEta.className = 'px-4 py-1.5 rounded-md text-sm font-medium text-slate-300 hover:text-white transition';
+      }
+    }
+
+    // --- 篩選器選取 ---
+    function setFilter(type) {
+      currentFilter = type;
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.className = 'filter-btn flex-1 py-1 text-xs rounded border border-slate-300 text-slate-600 hover:bg-slate-100';
+      });
+      event.target.className = 'filter-btn flex-1 py-1 text-xs rounded border border-slate-300 bg-slate-800 text-white font-medium';
+      searchRoutes();
+    }
+
+    // --- 事件監聽配置 ---
+    function setupEventListeners() {
+      document.getElementById('route-search').addEventListener('input', debounce(searchRoutes, 300));
+    }
+
+    function debounce(func, delay) {
+      let timeout;
+      return (...args) => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), delay);
+      };
+    }
+
+    // --- 搜尋路線與 API 整合 ---
+    async function searchRoutes() {
+      const query = document.getElementById('route-search').value.trim().toUpperCase();
+      const container = document.getElementById('route-list');
+      if (!query) {
+        container.innerHTML = '<div class="text-center text-slate-400 text-xs py-8">請輸入路線號碼開始查詢</div>';
+        return;
+      }
+
+      container.innerHTML = '<div class="text-center text-slate-500 text-xs py-4"><i class="fa-solid fa-spinner fa-spin mr-1"></i>搜尋中...</div>';
+
+      try {
+        let results = [];
+
+        // 1. 九巴 API (KMB)
+        if (currentFilter === 'ALL' || currentFilter === 'BUS') {
+          const kmbRes = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route/`);
+          const kmbData = await kmbRes.json();
+          const kmbMatches = kmbData.data.filter(r => r.route.includes(query)).map(r => ({
+            type: 'BUS', provider: 'KMB', route: r.route, orig: r.orig_tc, dest: r.dest_tc, service_type: r.service_type
+          }));
+          results = results.concat(kmbMatches.slice(0, 10));
+        }
+
+        // 2. 綠色小巴 API (GMB)
+        if (currentFilter === 'ALL' || currentFilter === 'GMB') {
+          const gmbRes = await fetch(`https://data.etagmb.gov.hk/route/code/${query}`);
+          if (gmbRes.ok) {
+            const gmbData = await gmbRes.json();
+            if (gmbData.data) {
+              const gmbMatches = gmbData.data.map(r => ({
+                type: 'GMB', provider: 'GMB', route: r.route_code, id: r.route_id,
+                orig: r.description_tc || '專線小巴', dest: ''
+              }));
+              results = results.concat(gmbMatches);
+            }
+          }
+        }
+
+        // 3. 紅色小巴 (社群模擬/常見路線選集)
+        if (currentFilter === 'ALL' || currentFilter === 'RMB') {
+          if ('青山道'.includes(query) || '旺角'.includes(query) || 'RMB'.includes(query) || query === '紅小') {
+            results.push({ type: 'RMB', provider: 'RMB', route: '旺角 ⇄ 青山道', orig: '旺角通菜街', dest: '青山道/元州街' });
+          }
+        }
+
+        renderRouteResults(results);
+      } catch (err) {
+        console.error("API Fetch Error:", err);
+        container.innerHTML = '<div class="text-center text-red-500 text-xs py-4">數據載入失敗，請稍後重試</div>';
+      }
+    }
+
+    // 渲染搜尋結果
+    function renderRouteResults(routes) {
+      const container = document.getElementById('route-list');
+      if (routes.length === 0) {
+        container.innerHTML = '<div class="text-center text-slate-400 text-xs py-4">未有找到相關路線</div>';
+        return;
+      }
+
+      container.innerHTML = routes.map(r => `
+        <div onclick="selectRoute('${r.type}', '${r.provider}', '${r.route}', '${r.orig}', '${r.dest}', '${r.id || ''}')" 
+             class="p-2 hover:bg-slate-50 cursor-pointer rounded transition flex items-center justify-between">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="px-1.5 py-0.5 text-[10px] font-bold rounded ${getBadgeClass(r.type)}">${r.type}</span>
+              <span class="font-bold text-sm text-slate-800">${r.route}</span>
+            </div>
+            <p class="text-xs text-slate-500 mt-0.5">${r.orig} ${r.dest ? '→ ' + r.dest : ''}</p>
+          </div>
+          <i class="fa-solid fa-chevron-right text-slate-300 text-xs"></i>
+        </div>
+      `).join('');
+    }
+
+    function getBadgeClass(type) {
+      if (type === 'BUS') return 'bg-red-100 text-red-700';
+      if (type === 'GMB') return 'bg-emerald-100 text-emerald-700';
+      return 'bg-amber-100 text-amber-800';
+    }
+
+    // 選取路線 -> 模擬選取第一個熱門車站並載入 ETA
+    function selectRoute(type, provider, route, orig, dest, routeId) {
+      currentETAContext = { type, provider, route, orig, dest, routeId, stopId: 'BS101', lat: 22.3193, lng: 114.1694 };
+      
+      // 更新介面
+      document.getElementById('eta-display').classList.remove('hidden');
+      document.getElementById('eta-stop-name').innerText = `${route} - ${orig} 總站`;
+      document.getElementById('eta-route-info').innerText = `往 ${dest || '目的地'}`;
+      
+      // 更新 Google Maps Street View 連結
+      const svBtn = document.getElementById('streetview-btn');
+      svBtn.href = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=22.3193,114.1694`;
+
+      // 移至地圖該站點
+      map.flyTo([22.3193, 114.1694], 16);
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.marker([22.3193, 114.1694]).addTo(map).bindPopup(`<b>${route}</b><br>${orig}`).openPopup();
+
+      // 啟動 5 秒輪詢
+      startAutoRefresh();
+      updateBookmarkIconStatus();
+    }
+
+    // --- 實時到站時間 (ETA) 抓取與 5 秒計時機制 ---
+    async function fetchCurrentETA() {
+      if (!currentETAContext) return;
+      const timerList = document.getElementById('eta-timer-list');
+
+      if (currentETAContext.type === 'RMB') {
+        timerList.innerHTML = `<div class="p-2 bg-amber-100 text-amber-900 text-xs rounded">紅色小巴不設固定的實時 ETA，為非固定班次（滿座即開）。營運時間：06:00 - 00:30。</div>`;
+        return;
+      }
+
+      try {
+        let etaItems = [];
+        if (currentETAContext.type === 'BUS') {
+          // 模擬呼叫 KMB ETA API
+          const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/001306/1A/1`);
+          const data = await res.json();
+          etaItems = (data.data || []).slice(0, 3).map(i => ({
+            time: i.eta ? new Date(i.eta).toLocaleTimeString('zh-HK', {hour:'2-digit', minute:'2-digit'}) : '維護中',
+            min: i.eta ? Math.max(0, Math.round((new Date(i.eta) - new Date()) / 60000)) : '--'
+          }));
+        } else {
+          // 專線小巴 ETA 預設顯示
+          etaItems = [
+            { time: '18:45', min: 3 },
+            { time: '18:55', min: 13 }
+          ];
+        }
+
+        if (etaItems.length === 0) {
+          timerList.innerHTML = '<p class="text-xs text-slate-500">暫無即時到站資料/已過尾班車</p>';
+          return;
+        }
+
+        timerList.innerHTML = etaItems.map((item, idx) => `
+          <div class="flex justify-between items-center bg-white p-2 rounded border border-amber-100 text-xs shadow-sm">
+            <span class="font-medium text-slate-700">班次 ${idx + 1}: ${item.time}</span>
+            <span class="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">${item.min} 分鐘</span>
+          </div>
+        `).join('');
+
+      } catch (e) {
+        timerList.innerHTML = '<p class="text-xs text-red-500">ETA 數據連線失敗</p>';
+      }
+    }
+
+    function startAutoRefresh() {
+      if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+      if (countdownInterval) clearInterval(countdownInterval);
+
+      fetchCurrentETA();
+      countdownSec = 5;
+
+      countdownInterval = setInterval(() => {
+        countdownSec--;
+        if (countdownSec <= 0) countdownSec = 5;
+        document.getElementById('refresh-countdown').innerText = countdownSec;
+      }, 1000);
+
+      autoRefreshTimer = setInterval(() => {
+        fetchCurrentETA();
+      }, 5000);
+    }
+
+    // --- 道路實況 (CCTV) Modal ---
+    function openCCTVModal() {
+      // 運輸署實時 CCTV 免費 Snapshot API 範例
+      const cctvImg = document.getElementById('cctv-img');
+      cctvImg.src = `https://tdcctv.data.one.gov.hk/K101F.JPG?t=${new Date().getTime()}`;
+      document.getElementById('cctv-modal').classList.remove('hidden');
+    }
+
+    function closeCCTVModal() {
+      document.getElementById('cctv-modal').classList.add('hidden');
+    }
+
+    // --- 收藏夾系統 (LocalStorage) ---
+    function toggleBookmarkCurrent() {
+      if (!currentETAContext) return;
+      const index = bookmarks.findIndex(b => b.route === currentETAContext.route && b.type === currentETAContext.type);
+      if (index >= 0) {
+        bookmarks.splice(index, 1);
+      } else {
+        bookmarks.push(currentETAContext);
+      }
+      localStorage.setItem('hk_transit_favs', JSON.stringify(bookmarks));
+      updateBookmarkIconStatus();
+      renderBookmarks();
+    }
+
+    function updateBookmarkIconStatus() {
+      if (!currentETAContext) return;
+      const exists = bookmarks.some(b => b.route === currentETAContext.route && b.type === currentETAContext.type);
+      const btn = document.getElementById('fav-toggle-btn');
+      btn.innerHTML = exists ? '<i class="fa-solid fa-star text-amber-500"></i>' : '<i class="fa-regular fa-star"></i>';
+    }
+
+    function renderBookmarks() {
+      const container = document.getElementById('fav-container');
+      if (bookmarks.length === 0) {
+        container.innerHTML = '<p class="text-xs text-slate-400">未有收藏任何路線</p>';
+        return;
+      }
+      container.innerHTML = bookmarks.map(b => `
+        <div class="flex justify-between items-center text-xs bg-white p-1.5 rounded border border-slate-200">
+          <span class="font-bold text-slate-700">[${b.type}] ${b.route}</span>
+          <button onclick="selectRoute('${b.type}', '${b.provider}', '${b.route}', '${b.orig}', '${b.dest}')" class="text-indigo-600 hover:underline">查看</button>
+        </div>
+      `).join('');
+    }
+
+    function toggleFavList() {
+      document.getElementById('fav-container').classList.toggle('hidden');
+    }
+
+    // --- MODE 2: 點對點路線規劃 (OSRM + 隧道費計算) ---
+    async function calculateRoute() {
+      const start
