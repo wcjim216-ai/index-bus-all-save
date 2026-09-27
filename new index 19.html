@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>香港全能交通與天氣助手 (HK Transit Fix Pro)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet 地圖 CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen font-sans">
+
+  <!-- 頂部導航頁籤 -->
+  <header class="bg-gray-800 border-b border-gray-700 px-4 py-2.5 flex justify-between items-center z-10 shadow-md">
+    <div class="flex items-center space-x-2">
+      <span class="text-2xl">🚌</span>
+      <h1 class="font-bold text-base text-white tracking-wide">HK Transit Ultimate Pro</h1>
+    </div>
+    
+    <nav class="flex bg-gray-700 p-1 rounded-lg space-x-1">
+      <button id="tab-btn-search" onclick="switchTab('search')" class="px-2.5 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition">🔍 路線/交通</button>
+      <button id="tab-btn-cctv" onclick="switchTab('cctv')" class="px-2.5 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition">📹 實時路況CCTV</button>
+      <button id="tab-btn-weather" onclick="switchTab('weather')" class="px-2.5 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition">🌤️ 天氣/信號</button>
+      <button id="tab-btn-fav" onclick="switchTab('fav')" class="px-2.5 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition">⭐ 收藏</button>
+    </nav>
+  </header>
+
+  <!-- 全局特別交通消息 -->
+  <div id="global-alert-bar" class="hidden bg-amber-900/90 border-b border-amber-700 px-4 py-2 text-xs text-amber-200 flex justify-between items-center z-10">
+    <span id="global-alert-text">⚠️ 載入特別交通與改道消息中...</span>
+    <button onclick="document.getElementById('global-alert-bar').classList.add('hidden')" class="text-amber-400 font-bold ml-2">✕</button>
+  </div>
+
+  <!-- 主要工作區 -->
+  <main class="flex-1 overflow-hidden relative max-w-3xl w-full mx-auto p-4 custom-scrollbar overflow-y-auto">
+    
+    <!-- ================= 分頁 1：搜尋路線與選擇 ================= -->
+    <div id="view-search" class="space-y-4">
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 space-y-3 shadow-lg">
+        <div>
+          <label class="block text-xs font-semibold text-gray-300 mb-1">1. 選擇公共交通類別</label>
+          <select id="transport-type" onchange="toggleTransportMode()" class="w-full bg-gray-900 border border-gray-600 rounded-lg p-2.5 text-sm text-white">
+            <option value="KMB">🚌 九巴 (KMB)</option>
+            <option value="MTR">🚇 港鐵 (MTR 重鐵)</option>
+            <option value="LRT">🚃 輕鐵 (Light Rail)</option>
+            <option value="FERRY">⛴️ 渡輪/船隻 (Ferry)</option>
+          </select>
+        </div>
+
+        <!-- 巴士搜尋框與熱門選單 -->
+        <div id="bus-input-box" class="space-y-2">
+          <label class="block text-xs font-semibold text-gray-300 mb-1">2. 輸入路線或選擇熱門路線</label>
+          <div class="flex space-x-2">
+            <input type="text" id="route-input" placeholder="例如: 1A, 102, 269C, 68X" class="flex-1 bg-gray-900 border border-gray-600 rounded-lg p-2.5 text-sm uppercase text-white">
+            <button id="search-btn" onclick="searchBusRoute()" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg text-sm font-bold transition shadow-md">搜尋</button>
+          </div>
+          <div class="flex items-center space-x-2 pt-1">
+            <span class="text-xs text-gray-400">快速選擇:</span>
+            <select onchange="quickSelectRoute(this.value)" class="bg-gray-900 border border-gray-700 text-xs text-gray-300 rounded p-1">
+              <option value="">-- 熱門路線 --</option>
+              <option value="1A">1A (中秀茂坪 ⇆ 尖沙咀碼頭)</option>
+              <option value="68X">68X (洪水橋 ⇆ 旺角東)</option>
+              <option value="102">102 (美孚 ⇆ 筲箕灣)</option>
+              <option value="269C">269C (天水圍市中心 ⇆ 觀塘碼頭)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 港鐵下拉框 -->
+        <div id="mtr-input-box" class="hidden">
+          <label class="block text-xs font-semibold text-gray-300 mb-1">2. 選擇港鐵鐵路綫</label>
+          <select id="mtr-line-select" onchange="loadMTRStops()" class="w-full bg-gray-900 border border-gray-600 rounded-lg p-2.5 text-sm text-white">
+            <option value="">-- 請選擇鐵路線 --</option>
+            <option value="KTL">觀塘綫 (Kwun Tong Line)</option>
+            <option value="ISL">港島綫 (Island Line)</option>
+            <option value="TWL">荃灣綫 (Tsuen Wan Line)</option>
+            <option value="TML">屯馬綫 (Tuen Ma Line)</option>
+            <option value="EAL">東鐵綫 (East Rail Line)</option>
+          </select>
+        </div>
+
+        <!-- 輕鐵下拉框 -->
+        <div id="lrt-input-box" class="hidden">
+          <label class="block text-xs font-semibold text-gray-300 mb-1">2. 選擇輕鐵車站</label>
+          <select id="lrt-station-select" onchange="loadLRTStation()" class="w-full bg-gray-900 border border-gray-600 rounded-lg p-2.5 text-sm text-white">
+            <option value="">-- 請選擇輕鐵車站 --</option>
+            <option value="1">屯門碼頭</option>
+            <option value="80">元朗</option>
+            <option value="285">天水圍</option>
+            <option value="340">兆康</option>
+          </select>
+        </div>
+
+        <!-- 渡輪下拉框 -->
+        <div id="ferry-input-box" class="hidden">
+          <label class="block text-xs font-semibold text-gray-300 mb-1">2. 選擇渡輪航線</label>
+          <select id="ferry-line-select" onchange="loadFerryPiers()" class="w-full bg-gray-900 border border-gray-600 rounded-lg p-2.5 text-sm text-white">
+            <option value="">-- 請選擇渡輪航線 --</option>
+            <option value="CENTRAL-TST">中環 ⇆ 尖沙咀 (天星小輪)</option>
+            <option value="WANChAI-TST">灣仔 ⇆ 尖沙咀 (天星小輪)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 方向選擇與確認提示 -->
+      <div id="dir-container" class="hidden bg-gray-800/80 p-3.5 rounded-xl border border-gray-700 space-y-2">
+        <label class="block text-xs font-semibold text-gray-300">3. 選擇行車方向：</label>
+        <div class="grid grid-cols-1 gap-2" id="dir-buttons"></div>
+        <div id="confirmed-dir-banner" class="hidden bg-blue-900/60 border border-blue-600/80 p-2 rounded-lg text-xs text-blue-200 font-bold flex items-center justify-between">
+          <span id="confirmed-dir-text">✅ 已確認方向</span>
+        </div>
+      </div>
+
+      <!-- 車站列表 -->
+      <div>
+        <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">🚏 沿途所有車站/碼頭 (按下載入班次，可自行更新)</h3>
+        <div id="stops-container" class="space-y-2 text-sm text-gray-400">請先選擇或搜尋路線。</div>
+      </div>
+    </div>
+
+    <!-- ================= 分頁 2：實時路況 CCTV 畫面 ================= -->
+    <div id="view-cctv" class="hidden space-y-4">
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 space-y-3 shadow-lg">
+        <div class="flex justify-between items-center">
+          <h2 class="text-sm font-bold text-white flex items-center gap-1">📹 運輸署實時路況 CCTV 影像</h2>
+          <button onclick="loadCCTVImages()" class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-2.5 py-1 rounded transition">🔄 刷新路況圖片</button>
+        </div>
+        <p class="text-xs text-gray-400">即時檢視主要幹道及隧道口交通情況：</p>
+        <div id="cctv-grid" class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+          <!-- 動態載入 CCTV 圖片 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 分頁 3：天文台警告信號、氣溫與未來 9 天預報 ================= -->
+    <div id="view-weather" class="hidden space-y-4">
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 space-y-3 shadow-lg">
+        <div class="flex justify-between items-center border-b border-gray-700 pb-2">
+          <h2 class="text-sm font-bold text-white flex items-center gap-1">🌤️ 香港天文台實時氣象</h2>
+          <button onclick="fetchWeather()" class="text-xs bg-blue-600/40 hover:bg-blue-600 text-blue-200 px-2 py-1 rounded transition">🔄 更新信號與天氣</button>
+        </div>
+
+        <div id="weather-warnings" class="flex flex-wrap gap-2 pt-1"></div>
+
+        <div class="grid grid-cols-3 gap-2 text-center py-2.5 bg-gray-900/60 rounded-lg border border-gray-700/60">
+          <div>
+            <span class="text-xs text-gray-400">現時氣溫</span>
+            <p id="weather-temp" class="text-xl font-bold text-amber-400">-- °C</p>
+          </div>
+          <div>
+            <span class="text-xs text-gray-400">相對濕度</span>
+            <p id="weather-humidity" class="text-xl font-bold text-blue-400">-- %</p>
+          </div>
+          <div>
+            <span class="text-xs text-gray-400">更新時間</span>
+            <p id="weather-update-time" class="text-xs font-semibold text-gray-300 mt-1">--:--</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 未來 9 天預報 (100% 修復顯示) -->
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 space-y-3 shadow-lg">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-gray-300">📅 未來 9 天天氣預報 (天文台官方數據)</h3>
+        <div id="nine-day-forecast" class="space-y-2 text-xs">
+          <div class="text-gray-500 py-2 text-center">載入 9 天預報中...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 分頁 4：收藏車站 (每 5 秒自動輪詢) ================= -->
+    <div id="view-fav" class="hidden space-y-4">
+      <div class="flex justify-between items-center bg-gray-800 p-3 rounded-xl border border-gray-700">
+        <div>
+          <h2 class="text-sm font-bold text-white flex items-center gap-1">⭐ 我的收藏車站</h2>
+          <span class="text-[11px] text-amber-400" id="fav-status-text">🔄 每 5 秒自動更新中...</span>
+        </div>
+        <button onclick="renderFavorites()" class="text-xs bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 px-3 py-1.5 rounded-lg transition">手動刷新</button>
+      </div>
+
+      <div id="fav-list-container" class="space-y-3"></div>
+    </div>
+
+  </main>
+
+  <!-- 全域地圖 Modal 彈窗 (已修復黑屏與 Google 街景連結) -->
+  <div id="map-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex flex-col p-4">
+    <div class="flex justify-between items-center bg-gray-800 p-3 rounded-t-xl border-b border-gray-700">
+      <h3 class="font-bold text-sm text-white" id="map-title">📍 車站地圖位置</h3>
+      <button onclick="closeMapModal()" class="text-gray-400 hover:text-white font-bold text-lg px-2">✕</button>
+    </div>
+    <div class="flex-1 bg-gray-900 rounded-b-xl overflow-hidden relative">
+      <div id="map" class="h-full w-full"></div>
+    </div>
+  </div>
+
+  <script>
+    // --- 全域變數 ---
+    let map = null;
+    let mapMarker = null;
+    let favIntervalTimer = null;
+    let favorites = JSON.parse(localStorage.getItem('hk_transit_favs_v11') || '[]');
+
+    // 全港熱點 CCTV 清單 (運輸署開放 API 截圖)
+    const cctvList = [
+      { name: "紅磡海底隧道 (九龍入口)", url: "https://tdcctv.data.gov.hk/K101F.JPG" },
+      { name: "東區海底隧道 (港島入口)", url: "https://tdcctv.data.gov.hk/H403F.JPG" },
+      { name: "獅子山隧道 (九龍入口)", url: "https://tdcctv.data.gov.hk/K801F.JPG" },
+      { name: "觀塘道 (近開源道)", url: "https://tdcctv.data.gov.hk/K401F.JPG" },
+      { name: "屯門公路 (近深井)", url: "https://tdcctv.data.gov.hk/N301F.JPG" },
+      { name: "吐露港公路 (近科學園)", url: "https://tdcctv.data.gov.hk/N101F.JPG" }
+    ];
+
+    window.addEventListener('DOMContentLoaded', () => {
+      fetchTrafficAlerts();
+      fetchWeather();
+      loadCCTVImages();
+      document.getElementById('route-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') searchBusRoute();
+      });
+    });
+
+    // --- 1. Tab 切換機制 ---
+    function switchTab(tabName) {
+      document.getElementById('view-search').classList.add('hidden');
+      document.getElementById('view-cctv').classList.add('hidden');
+      document.getElementById('view-weather').classList.add('hidden');
+      document.getElementById('view-fav').classList.add('hidden');
+
+      ['search', 'cctv', 'weather', 'fav'].forEach(t => {
+        document.getElementById(`tab-btn-${t}`).className = "px-2.5 py-1.5 text-xs font-bold rounded-md text-gray-300 hover:text-white transition";
+      });
+
+      if (favIntervalTimer) clearInterval(favIntervalTimer);
+
+      if (tabName === 'search') {
+        document.getElementById('view-search').classList.remove('hidden');
+        document.getElementById('tab-btn-search').className = "px-2.5 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+      } else if (tabName === 'cctv') {
+        document.getElementById('view-cctv').classList.remove('hidden');
+        document.getElementById('tab-btn-cctv').className = "px-2.5 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+        loadCCTVImages();
+      } else if (tabName === 'weather') {
+        document.getElementById('view-weather').classList.remove('hidden');
+        document.getElementById('tab-btn-weather').className = "px-2.5 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+        fetchWeather();
+      } else if (tabName === 'fav') {
+        document.getElementById('view-fav').classList.remove('hidden');
+        document.getElementById('tab-btn-fav').className = "px-2.5 py-1.5 text-xs font-bold rounded-md bg-blue-600 text-white transition";
+        renderFavorites();
+        favIntervalTimer = setInterval(() => {
+          if (document.visibilityState === 'visible') renderFavorites(true);
+        }, 5000);
+      }
+    }
+
+    function toggleTransportMode() {
+      const type = document.getElementById('transport-type').value;
+      ['bus-input-box', 'mtr-input-box', 'lrt-input-box', 'ferry-input-box'].forEach(id => document.getElementById(id).classList.add('hidden'));
+      document.getElementById('dir-container').classList.add('hidden');
+      document.getElementById('stops-container').innerHTML = '請選擇路線。';
+
+      if (type === 'MTR') document.getElementById('mtr-input-box').classList.remove('hidden');
+      else if (type === 'LRT') document.getElementById('lrt-input-box').classList.remove('hidden');
+      else if (type === 'FERRY') document.getElementById('ferry-input-box').classList.remove('hidden');
+      else document.getElementById('bus-input-box').classList.remove('hidden');
+    }
+
+    function quickSelectRoute(route) {
+      if (!route) return;
+      document.getElementById('route-input').value = route;
+      searchBusRoute();
+    }
+
+    // --- 2. 實時 CCTV 載入修復 ---
+    function loadCCTVImages() {
+      const container = document.getElementById('cctv-grid');
+      container.innerHTML = '';
+      const timestamp = Date.now();
+
+      cctvList.forEach(cam => {
+        const card = document.createElement('div');
+        card.className = "bg-gray-900 border border-gray-700 rounded-lg overflow-hidden p-2 space-y-1.5";
+        card.innerHTML = `
+          <div class="text-xs font-bold text-gray-200 truncate">📷 ${cam.name}</div>
+          <img src="${cam.url}?t=${timestamp}" alt="${cam.name}" class="w-full h-40 object-cover rounded border border-gray-800" onerror="this.onerror=null; this.src='https://via.placeholder.com/400x225?text=CCTV+更新中';" />
+          <div class="text-[10px] text-gray-400 text-right">即時更新時間: ${new Date().toLocaleTimeString()}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // --- 3. 抓取交通改道與天文台 9 天預報 (100% 修復) ---
+    async function fetchTrafficAlerts() {
+      try {
+        const res = await fetch('https://rt.data.gov.hk/v1/transport/batch/specialtrafficnews?lang=zh-Hant');
+        const data = await res.json();
+        if (data && data.data && data.data.length > 0) {
+          document.getElementById('global-alert-bar').classList.remove('hidden');
+          document.getElementById('global-alert-text').innerText = `🚨 特別交通消息：${data.data[0].chinText || '道路 traffic 正常'}`;
+        }
+      } catch (e) {}
+    }
+
+    async function fetchWeather() {
+      try {
+        // 氣溫與濕度
+        const r1 = await fetch('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=tc');
+        const d1 = await r1.json();
+        if (d1) {
+          document.getElementById('weather-temp').innerText = `${d1.temperature?.data[1]?.value || '--'} °C`;
+          document.getElementById('weather-humidity').innerText = `${d1.humidity?.data[0]?.value || '--'} %`;
+          document.getElementById('weather-update-time').innerText = d1.updateTime ? d1.updateTime.substring(11, 16) : '--:--';
+        }
+
+        // 警告信號
+        const r2 = await fetch('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warnsum&lang=tc');
+        const d2 = await r2.json();
+        const warnBox = document.getElementById('weather-warnings');
+        warnBox.innerHTML = '';
+        
+        let hasWarning = false;
+        if (d2 && Object.keys(d2).length > 0) {
+          for (const key in d2) {
+            if (d2[key] && d2[key].name) {
+              hasWarning = true;
+              warnBox.innerHTML += `<span class="bg-red-600 text-white font-bold px-2 py-1 rounded text-xs">⚠️ ${d2[key].name}</span>`;
+            }
+          }
+        }
+        if (!hasWarning) {
+          warnBox.innerHTML = `<span class="bg-green-700 text-white font-bold px-2 py-0.5 rounded text-xs">✅ 現時無惡劣天氣警告信號</span>`;
+        }
+
+        // 未來 9 天天氣預報 (修復解析)
+        const r3 = await fetch('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=tc');
+        const d3 = await r3.json();
+        const fBox = document.getElementById('nine-day-forecast');
+
+        if (d3 && d3.weatherForecast) {
+          fBox.innerHTML = d3.weatherForecast.slice(0, 9).map(day => {
+            const dateStr = `${day.forecastDate.substring(4,6)}月${day.forecastDate.substring(6,8)}日`;
+            return `
+              <div class="flex justify-between items-center bg-gray-900/80 p-2.5 rounded-lg border border-gray-700/60">
+                <div class="font-bold text-gray-100 w-24">${dateStr} (${day.week})</div>
+                <div class="text-amber-400 font-semibold">${day.forecastMintemp.value}°C - ${day.forecastMaxtemp.value}°C</div>
+                <div class="text-blue-300">${day.forecastRH.value}%-${day.forecastMaxRH.value}% 濕度</div>
+                <div class="text-gray-300 truncate max-w-[130px]" title="${day.forecastForecast}">${day.forecastForecast}</div>
+              </div>
+            `;
+          }).join('');
+        } else {
+          fBox.innerHTML = '<div class="text-gray-400 py-2 text-center">暫未取得 9 天預報數據</div>';
+        }
+      } catch (e) {
+        console.error("天氣讀取失敗:", e);
+      }
+    }
+
+    // --- 4. 搜尋巴士路線與確認方向 ---
+    async function searchBusRoute() {
+      const route = document.getElementById('route-input').value.trim().toUpperCase();
+      const container = document.getElementById('stops-container');
+      const dirContainer = document.getElementById('dir-container');
+      const dirButtons = document.getElementById('dir-buttons');
+      const searchBtn = document.getElementById('search-btn');
+
+      if (!route) {
+        alert('請輸入路線號碼！');
+        return;
+      }
+
+      searchBtn.disabled = true;
+      searchBtn.innerText = '搜尋中...';
+      container.innerHTML = `<div class="text-blue-400 py-4 text-center">正在搜尋 ${route} 路線數據...</div>`;
+
+      try {
+        const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route/${route}`);
+        const routeMeta = await res.json();
+
+        if (!routeMeta.data || routeMeta.data.length === 0) {
+          container.innerHTML = `<div class="text-red-400 py-4 text-center">找不到路線 ${route}。</div>`;
+          dirContainer.classList.add('hidden');
+          return;
+        }
+
+        dirContainer.classList.remove('hidden');
+        dirButtons.innerHTML = '';
+        document.getElementById('confirmed-dir-banner').classList.add('hidden');
+
+        const addedDirections = new Set();
+        routeMeta.data.forEach((item) => {
+          const boundKey = `${item.bound}_${item.service_type}`;
+          if (!addedDirections.has(boundKey)) {
+            addedDirections.add(boundKey);
+            const dirText = item.bound === 'O' ? '去程' : '回程';
+            const serviceText = item.service_type !== '1' ? ` (特別班次 ${item.service_type})` : '';
+            
+            const btn = document.createElement('button');
+            btn.className = "bg-gray-700 hover:bg-blue-600 text-white p-2.5 rounded-lg text-xs transition font-semibold text-left border border-gray-600 flex justify-between items-center";
+            btn.innerHTML = `
+              <span>🚩 ${dirText}：由 <strong>${item.orig_tc}</strong> 往 <strong>${item.dest_tc}</strong>${serviceText}</span>
+              <span class="text-blue-400 font-bold">按此確認方向 ➔</span>
+            `;
+            btn.onclick = () => {
+              document.getElementById('confirmed-dir-banner').classList.remove('hidden');
+              document.getElementById('confirmed-dir-text').innerText = `✅ 已確認方向：${item.orig_tc} 往 ${item.dest_tc} ${serviceText}`;
+              loadAllStopsForKMB(route, item.bound, item.service_type);
+            };
+            dirButtons.appendChild(btn);
+          }
+        });
+
+        // 預設確認第一個方向
+        const first = routeMeta.data[0];
+        document.getElementById('confirmed-dir-banner').classList.remove('hidden');
+        document.getElementById('confirmed-dir-text').innerText = `✅ 已確認方向：${first.orig_tc} 往 ${first.dest_tc}`;
+        loadAllStopsForKMB(route, first.bound, first.service_type);
+
+      } catch (err) {
+        container.innerHTML = `<div class="text-red-400 py-4 text-center">路線搜尋失敗。</div>`;
+      } finally {
+        searchBtn.disabled = false;
+        searchBtn.innerText = '搜尋';
+      }
+    }
+
+    async function loadAllStopsForKMB(route, bound, serviceType) {
+      const container = document.getElementById('stops-container');
+      container.innerHTML = '<div class="text-gray-400 py-4 text-center">讀取車站清單中...</div>';
+
+      try {
+        const dirParam = bound === 'O' ? 'outbound' : 'inbound';
+        const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route-stop/${route}/${dirParam}/${serviceType}`);
+        const data = await res.json();
+
+        if (!data.data || data.data.length === 0) {
+          container.innerHTML = `<div class="text-red-400 py-4 text-center">無車站數據。</div>`;
+          return;
+        }
+
+        const stopPromises = data.data.map(item => 
+          fetch(`https://data.etabus.gov.hk/v1/transport/kmb/stop/${item.stop}`).then(r => r.json()).catch(() => null)
+        );
+
+        const stopResults = await Promise.allSettled(stopPromises);
+        container.innerHTML = '';
+
+        data.data.forEach((item, index) => {
+          const stopInfo = stopResults[index].status === 'fulfilled' && stopResults[index].value ? stopResults[index].value.data : null;
+          const stopName = stopInfo ? stopInfo.name_tc : `車站 (${item.stop})`;
+          const lat = stopInfo ? stopInfo.lat : 22.3193;
+          const long = stopInfo ? stopInfo.long : 114.1694;
+
+          const card = document.createElement('div');
+          card.className = "bg-gray-800 border border-gray-700 p-3.5 rounded-xl hover:border-blue-500 transition space-y-2 shadow-md";
+          card.innerHTML = `
+            <div class="flex justify-between items-start">
+              <div class="cursor-pointer flex-1" onclick="fetchBusETA('KMB', '${route}', '${item.stop}', ${serviceType})">
+                <span class="bg-red-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">九巴</span>
+                <span class="font-bold text-gray-100 ml-1 text-sm">${index + 1}. ${stopName}</span>
+                <p class="text-[11px] text-blue-400 mt-1">👉 按此載入班次 (可自行手動更新)</p>
+              </div>
+              <button onclick="addFavorite('KMB', '${route}', '${item.stop}', '${stopName}', ${lat}, ${long})" class="text-xs bg-yellow-500/20 hover:bg-yellow-500/40 text-yellow-300 border border-yellow-500/40 px-2.5 py-1 rounded-lg">⭐ 收藏</button>
+            </div>
+            <div id="eta-box-${item.stop}" class="hidden bg-gray-900/90 rounded-lg p-2.5 border border-gray-700/80 space-y-2"></div>
+            <div class="flex justify-between items-center text-xs text-gray-400 pt-1 border-t border-gray-700/50">
+              <button onclick="openMapModal('${stopName}', ${lat}, ${long})" class="text-blue-400 hover:underline">🗺️ 自行開啟地圖</button>
+              <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${long}" target="_blank" class="text-gray-400 hover:underline">📍 Google 實景</a>
+            </div>
+          `;
+          container.appendChild(card);
+        });
+      } catch (err) {
+        container.innerHTML = `<div class="text-red-400 py-4 text-center">車站載入失敗。</div>`;
+      }
+    }
+
+    // --- 5. 按下車站後單次載入班次，並提供【🔄 立即更新一次班次】按鈕 ---
+    async function fetchBusETA(company, route, stopId, serviceType = 1) {
+      const box = document.getElementById(`eta-box-${stopId}`);
+      if (!box) return;
+
+      box.classList.remove('hidden');
+      box.innerHTML = `<span class="text-xs text-gray-400">正在單次讀取到站時間...</span>`;
+
+      try {
+        const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${stopId}/${route}/${serviceType}`);
+        const data = await res.json();
+
+        if (data.data && data.data.length > 0) {
+          const list = data.data.slice(0, 4);
+          let html = '';
+          list.forEach((etaItem, idx) => {
+            const { diffMinutes, clockTime } = formatETA(etaItem.eta);
+            html += `
+              <div class="flex justify-between items-center py-1 border-b border-gray-800 last:border-0 text-xs">
+                <span class="text-gray-300">班次 ${idx+1} (往 ${etaItem.dest_tc || '目的地'})</span>
+                <span class="font-bold text-green-400 text-sm">${diffMinutes} 分鐘 <span class="text-gray-400 font-normal text-xs">(${clockTime})</span></span>
+              </div>
+            `;
+          });
+
+          html += `
+            <div class="pt-2 flex justify-between items-center border-t border-gray-800 text-[11px]">
+              <span class="text-gray-500">最後更新: ${new Date().toLocaleTimeString()}</span>
+              <button onclick="fetchBusETA('${company}', '${route}', '${stopId}', ${serviceType})" class="bg-blue-600/40 hover:bg-blue-600 text-blue-200 px-2 py-0.5 rounded transition font-bold">🔄 立即更新一次班次</button>
+            </div>
+          `;
+
+          box.innerHTML = html;
+        } else {
+          box.innerHTML = `<span class="text-xs text-gray-500">暫無即時班次數據</span>`;
+        }
+      } catch (e) {
+        box.innerHTML = `<span class="text-xs text-red-400">ETA 讀取失敗</span>`;
+      }
+    }
+
+    function formatETA(timeStr) {
+      if (!timeStr) return { diffMinutes: '--', clockTime: '--:--' };
+      const formattedStr = timeStr.includes('T') ? timeStr : timeStr.replace(' ', 'T');
+      const etaDate = new Date(formattedStr);
+      const now = new Date();
+      const diffMs = etaDate - now;
+      const diffMinutes = Math.max(0, Math.round(diffMs / 60000));
+      
+      const hours = String(etaDate.getHours()).padStart(2, '0');
+      const minutes = String(etaDate.getMinutes()).padStart(2, '0');
+      
+      return { diffMinutes, clockTime: `${hours}:${minutes}` };
+    }
+
+    // --- 6. 地圖 Modal (修復灰屏問題) ---
+    function openMapModal(stopName, lat, long) {
+      document.getElementById('map-modal').classList.remove('hidden');
+      document.getElementById('map-title').innerText = `📍 ${stopName} 地圖位置`;
+
+      if (!map) {
+        map = L.map('map').setView([lat, long], 16);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+      } else {
+        map.setView([lat, long], 16);
+      }
+
+      if (mapMarker) map.removeLayer(mapMarker);
+      mapMarker = L.marker([lat, long]).addTo(map).bindPopup(`<b>${stopName}</b>`).openPopup();
+
+      // 強制重繪地圖尺寸，解決黑屏問題
+      setTimeout(() => { if (map) map.invalidateSize(); }, 250);
+    }
+
+    function closeMapModal() {
+      document.getElementById('map-modal').classList.add('hidden');
+    }
+
+    // --- 7. 收藏夾 ---
+    function addFavorite(company, route, stopId, stopName, lat, long) {
+      if (favorites.some(f => f.stopId === stopId && f.route === route)) {
+        alert('此車站已在收藏夾中！');
+        return;
+      }
+      favorites.push({ company, route, stopId, stopName, lat, long });
+      localStorage.setItem('hk_transit_favs_v11', JSON.stringify(favorites));
+      alert('已成功收藏！');
+    }
+
+    function removeFavorite(index) {
+      favorites.splice(index, 1);
+      localStorage.setItem('hk_transit_favs_v11', JSON.stringify(favorites));
+      renderFavorites();
+    }
+
+    async function renderFavorites(isSilent = false) {
+      const container = document.getElementById('fav-list-container');
+      if (favorites.length === 0) {
+        container.innerHTML = `<div class="text-xs text-gray-500 text-center py-8">未有收藏車站。</div>`;
+        return;
+      }
+
+      if (!isSilent) container.innerHTML = `<div class="text-xs text-blue-400 text-center py-4">更新收藏班次中...</div>`;
+
+      const promises = favorites.map(item => fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${item.stopId}/${item.route}/1`).then(r => r.json()).catch(() => null));
+      const results = await Promise.allSettled(promises);
+      let html = '';
+
+      favorites.forEach((item, index) => {
+        const resData = results[index].status === 'fulfilled' ? results[index].value : null;
+        let etaRows = '<div class="text-xs text-gray-500 py-1">暫無班次數據</div>';
+
+        if (resData && resData.data && resData.data.length > 0) {
+          const list = resData.data.slice(0, 4);
+          etaRows = list.map((etaItem, idx) => {
+            const { diffMinutes, clockTime } = formatETA(etaItem.eta);
+            return `
+              <div class="flex justify-between items-center py-1 border-b border-gray-800 last:border-0 text-xs">
+                <span class="text-gray-300">班次 ${idx+1} (往 ${etaItem.dest_tc || '目的地'})</span>
+                <span class="font-bold text-green-400 text-sm">${diffMinutes} 分鐘 (${clockTime})</span>
+              </div>
+            `;
+          }).join('');
+        }
+
+        html += `
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3.5 space-y-2 shadow-lg">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="bg-red-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">${item.company}</span>
+                <span class="font-bold text-base text-white ml-1">${item.route}</span>
+                <span class="text-xs text-gray-300 ml-2">${item.stopName}</span>
+              </div>
+              <button onclick="removeFavorite(${index})" class="text-xs text-red-400">刪除</button>
+            </div>
+            <div class="bg-gray-900/90 rounded-lg p-2.5 border border-gray-700/70 space-y-1">${etaRows}</div>
+            <div class="flex justify-between text-xs text-gray-400 pt-1">
+              <button onclick="openMapModal('${item.stopName}', ${item.lat}, ${item.long})" class="text-blue-400 hover:underline">🗺️ 自行開啟地圖</button>
+              <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${item.lat},${item.long}" target="_blank" class="text-gray-400 hover:underline">📍 Google 實景</a>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+      document.getElementById('fav-status-text').innerText = `🔄 [5秒自動更新] ${new Date().toLocaleTimeString()}`;
+    }
+  </script>
+</body>
+</html>
