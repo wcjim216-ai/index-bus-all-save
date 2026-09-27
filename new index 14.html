@@ -397,4 +397,232 @@
         data.data.forEach((item, index) => {
           const stopInfo = stopResults[index].status === 'fulfilled' && stopResults[index].value ? stopResults[index].value.data : null;
           const stopName = stopInfo ? stopInfo.name_tc : `車站 (${item.stop})`;
-          const lat = stopInfo ? stopInfo.lat :
+          const lat = stopInfo ? stopInfo.lat : 22.3193;
+          const long = stopInfo ? stopInfo.long : 114.1694;
+
+          const card = document.createElement('div');
+          card.className = "bg-gray-800 border border-gray-700 p-3.5 rounded-xl hover:border-blue-500 transition space-y-2 shadow-md";
+          card.innerHTML = `
+            <div class="flex justify-between items-start">
+              <div class="cursor-pointer flex-1" onclick="fetchBusETA('KMB', '${route}', '${item.stop}', ${serviceType})">
+                <span class="bg-red-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">九巴</span>
+                <span class="font-bold text-gray-100 ml-1 text-sm">${index + 1}. ${stopName}</span>
+                <p class="text-[11px] text-blue-400 mt-1">👉 按下此車站顯示 3-4 班即時到站時間</p>
+              </div>
+              <button onclick="addFavorite('KMB', '${route}', '${item.stop}', '${stopName}', ${lat}, ${long})" class="text-xs bg-yellow-500/20 hover:bg-yellow-500/40 text-yellow-300 border border-yellow-500/40 px-2.5 py-1 rounded-lg transition">⭐ 收藏</button>
+            </div>
+            <div id="eta-box-${item.stop}" class="hidden bg-gray-900/90 rounded-lg p-2.5 border border-gray-700/80 space-y-1"></div>
+            <div class="flex justify-between items-center text-xs text-gray-400 pt-1 border-t border-gray-700/50">
+              <button onclick="openMapModal('${stopName}', ${lat}, ${long})" class="text-blue-400 hover:underline">🗺️ 自行開啟地圖</button>
+              <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${long}" target="_blank" class="text-gray-400 hover:underline">📍 Google 街景</a>
+            </div>
+          `;
+          container.appendChild(card);
+        });
+      } catch (err) {
+        container.innerHTML = `<div class="text-red-400 py-4 text-center">車站載入失敗。</div>`;
+      }
+    }
+
+    // --- 4. 輕鐵 (Light Rail) 實時到站 ---
+    async function loadLRTETA() {
+      const stId = document.getElementById('lrt-station-select').value;
+      const container = document.getElementById('stops-container');
+
+      if (!stId) return;
+
+      container.innerHTML = `<div class="text-blue-400 py-4 text-center">正在讀取輕鐵到站數據...</div>`;
+
+      try {
+        const res = await fetch(`https://rt.data.gov.hk/v1/transport/mtr/lrt/getSchedule.php?station_id=${stId}`);
+        const data = await res.json();
+
+        if (data.status === 1 && data.platform_list) {
+          container.innerHTML = '';
+          data.platform_list.forEach(plat => {
+            const card = document.createElement('div');
+            card.className = "bg-gray-800 border border-gray-700 p-3.5 rounded-xl space-y-2 shadow-md";
+            
+            let routeListHtml = '';
+            if (plat.route_list && plat.route_list.length > 0) {
+              routeListHtml = plat.route_list.slice(0, 4).map(r => `
+                <div class="flex justify-between items-center py-1 border-b border-gray-800 last:border-0 text-xs">
+                  <span class="text-gray-300">路線 ${r.route_no} (往 ${r.dest_ch})</span>
+                  <span class="font-bold text-amber-400 text-sm">${r.time_ch}</span>
+                </div>
+              `).join('');
+            } else {
+              routeListHtml = `<div class="text-xs text-gray-500">暫無列車班次</div>`;
+            }
+
+            card.innerHTML = `
+              <div class="flex justify-between items-center">
+                <span class="bg-amber-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">輕鐵</span>
+                <span class="font-bold text-white text-sm">月台 ${plat.platform_id}</span>
+              </div>
+              <div class="bg-gray-900/90 rounded-lg p-2.5 border border-gray-700/80 space-y-1">
+                ${routeListHtml}
+              </div>
+            `;
+            container.appendChild(card);
+          });
+        }
+      } catch (e) {
+        container.innerHTML = `<div class="text-red-400 py-4 text-center">輕鐵數據載入失敗。</div>`;
+      }
+    }
+
+    // --- 5. 時間格式化 ---
+    function formatETA(timeStr) {
+      if (!timeStr) return { diffMinutes: '--', clockTime: '--:--' };
+      const formattedStr = timeStr.includes('T') ? timeStr : timeStr.replace(' ', 'T');
+      const etaDate = new Date(formattedStr);
+      const now = new Date();
+      const diffMs = etaDate - now;
+      const diffMinutes = Math.max(0, Math.round(diffMs / 60000));
+      
+      const hours = String(etaDate.getHours()).padStart(2, '0');
+      const minutes = String(etaDate.getMinutes()).padStart(2, '0');
+      
+      return { diffMinutes, clockTime: `${hours}:${minutes}` };
+    }
+
+    async function fetchBusETA(company, route, stopId, serviceType = 1) {
+      const box = document.getElementById(`eta-box-${stopId}`);
+      if (!box) return;
+
+      box.classList.remove('hidden');
+      box.innerHTML = `<span class="text-xs text-gray-400">正在查詢 3-4 班到站時間...</span>`;
+
+      try {
+        const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${stopId}/${route}/${serviceType}`);
+        const data = await res.json();
+
+        if (data.data && data.data.length > 0) {
+          const list = data.data.slice(0, 4);
+          let html = '';
+          list.forEach((etaItem, idx) => {
+            const { diffMinutes, clockTime } = formatETA(etaItem.eta);
+            html += `
+              <div class="flex justify-between items-center py-1 border-b border-gray-800 last:border-0 text-xs">
+                <span class="text-gray-300">班次 ${idx+1} (往 ${etaItem.dest_tc || '目的地'})</span>
+                <span class="font-bold text-green-400 text-sm">${diffMinutes} 分鐘 <span class="text-gray-400 font-normal text-xs">(${clockTime})</span></span>
+              </div>
+            `;
+          });
+          box.innerHTML = html;
+        } else {
+          box.innerHTML = `<span class="text-xs text-gray-500">暫無即時班次數據</span>`;
+        }
+      } catch (e) {
+        box.innerHTML = `<span class="text-xs text-red-400">ETA 讀取失敗</span>`;
+      }
+    }
+
+    // --- 6. 收藏頁面 (每 5 秒獨立輪詢) ---
+    function addFavorite(company, route, stopId, stopName, lat, long) {
+      if (favorites.some(f => f.stopId === stopId && f.route === route)) {
+        alert('此車站/碼頭已在收藏夾中！');
+        return;
+      }
+      favorites.push({ company, route, stopId, stopName, lat, long });
+      localStorage.setItem('hk_transit_favs_v8', JSON.stringify(favorites));
+      alert('已成功收藏！點擊頂部「⭐ 我的收藏」即可檢視（每 5 秒自動更新）。');
+    }
+
+    function removeFavorite(index) {
+      favorites.splice(index, 1);
+      localStorage.setItem('hk_transit_favs_v8', JSON.stringify(favorites));
+      renderFavorites();
+    }
+
+    async function renderFavorites(isSilent = false) {
+      const container = document.getElementById('fav-list-container');
+      if (favorites.length === 0) {
+        container.innerHTML = `<div class="text-xs text-gray-500 text-center py-8">未有收藏車站。請在搜尋頁點擊「⭐ 收藏」。</div>`;
+        return;
+      }
+
+      if (!isSilent) {
+        container.innerHTML = `<div class="text-xs text-blue-400 text-center py-4">更新收藏班次中 (3-4班)...</div>`;
+      }
+
+      const promises = favorites.map(item => 
+        fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${item.stopId}/${item.route}/1`)
+          .then(res => res.json()).catch(() => null)
+      );
+
+      const results = await Promise.allSettled(promises);
+      let html = '';
+
+      favorites.forEach((item, index) => {
+        const resData = results[index].status === 'fulfilled' ? results[index].value : null;
+        let etaRows = '<div class="text-xs text-gray-500 py-1">暫無班次數據</div>';
+
+        if (resData && resData.data && resData.data.length > 0) {
+          const list = resData.data.slice(0, 4);
+          etaRows = list.map((etaItem, idx) => {
+            const { diffMinutes, clockTime } = formatETA(etaItem.eta);
+            return `
+              <div class="flex justify-between items-center py-1 border-b border-gray-800 last:border-0 text-xs">
+                <span class="text-gray-300">班次 ${idx+1} (往 ${etaItem.dest_tc || '目的地'})</span>
+                <div class="text-right">
+                  <span class="font-bold text-green-400 text-sm">${diffMinutes} 分鐘</span>
+                  <span class="text-gray-400 text-xs ml-1">(${clockTime})</span>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        html += `
+          <div class="bg-gray-800 border border-gray-700 rounded-xl p-3.5 space-y-2 shadow-lg">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="bg-red-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">${item.company}</span>
+                <span class="font-bold text-base text-white ml-1">${item.route}</span>
+                <span class="text-xs text-gray-300 ml-2">${item.stopName}</span>
+              </div>
+              <button onclick="removeFavorite(${index})" class="text-xs text-red-400 hover:text-red-300">刪除</button>
+            </div>
+            
+            <div class="bg-gray-900/90 rounded-lg p-2.5 border border-gray-700/70 space-y-1">
+              ${etaRows}
+            </div>
+
+            <div class="flex justify-between text-xs text-gray-400 pt-1">
+              <button onclick="openMapModal('${item.stopName}', ${item.lat}, ${item.long})" class="text-blue-400 hover:underline">🗺️ 自行開啟地圖</button>
+              <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${item.lat},${item.long}" target="_blank" class="text-gray-400 hover:underline">📍 Google 街景</a>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+      document.getElementById('fav-status-text').innerText = `🔄 [5秒自動更新中] 最後更新於 ${new Date().toLocaleTimeString()}`;
+    }
+
+    // --- 7. 地圖 Modal 彈窗 (自行選擇開啟) ---
+    function openMapModal(stopName, lat, long) {
+      document.getElementById('map-modal').classList.remove('hidden');
+      document.getElementById('map-title').innerText = `📍 ${stopName} 地圖位置`;
+
+      if (!map) {
+        map = L.map('map').setView([lat, long], 16);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+      } else {
+        map.setView([lat, long], 16);
+      }
+
+      if (mapMarker) map.removeLayer(mapMarker);
+      mapMarker = L.marker([lat, long]).addTo(map).bindPopup(`<b>${stopName}</b>`).openPopup();
+
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+
+    function closeMapModal() {
+      document.getElementById('map-modal').classList.add('hidden');
+    }
+  </script>
+</body>
+</html>
